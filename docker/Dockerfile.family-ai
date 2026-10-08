@@ -1,0 +1,39 @@
+FROM golang:1.25-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/arbiter ./cmd/arbiter
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o /out/catalog-convert ./cmd/catalog-convert
+
+FROM alpine:3.21
+
+ARG UID=1234
+ARG GID=1234
+
+WORKDIR /app
+ENV BINDHOST=0.0.0.0 \
+    CONFIGDIR=/config \
+    CONFIG_FILE=/config/arbiter.yaml \
+    DATADIR=/data \
+    PORT=8080
+
+RUN apk add --no-cache ca-certificates wget \
+    && addgroup -g "${GID}" -S arbiter \
+    && adduser -u "${UID}" -S arbiter -G arbiter \
+    && mkdir -p /config /data \
+    && chown -R arbiter:arbiter /config /data
+
+COPY --from=build /out/arbiter /app/arbiter
+COPY --from=build /out/catalog-convert /app/catalog-convert
+COPY docker/startup.sh /app/startup.sh
+COPY docs/examples /app/examples
+COPY arbiter.example.yaml /app/examples/arbiter.example.yaml
+
+RUN chmod 755 /app/arbiter /app/catalog-convert /app/startup.sh
+
+USER arbiter:arbiter
+EXPOSE 8080
+ENTRYPOINT ["/app/startup.sh"]
+CMD ["arbiter"]
